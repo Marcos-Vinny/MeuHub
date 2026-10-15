@@ -1,3 +1,5 @@
+const RAWG_KEY='7b07ac5d0ea74c20afe3e8140e91136e';
+
 (function(){
 'use strict';
 const $=(s,r)=>(r||document).querySelector(s);
@@ -20,7 +22,6 @@ function initials(n){const p=String(n||'').trim().split(/\s+/).filter(Boolean);r
 function hexRgb(h){h=String(h||'#888888').replace('#','');if(h.length===3)h=h.split('').map(c=>c+c).join('');const n=parseInt(h,16);return [(n>>16)&255,(n>>8)&255,n&255];}
 function lum(h){const [r,g,b]=hexRgb(h).map(v=>{v/=255;return v<=.03928?v/12.92:Math.pow((v+.055)/1.055,2.4);});return .2126*r+.7152*g+.0722*b;}
 const onColor=h=>lum(h)>0.36?'#0b0d14':'#ffffff';
-const RAWG_KEY='';
 const ROM={ii:'2',iii:'3',iv:'4',v:'5',vi:'6',vii:'7',viii:'8',ix:'9',x:'10'};
 const norm=s=>String(s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9 ]/g,' ').split(/\s+/).filter(Boolean).map(w=>ROM[w]||w).join(' ');
 const STAT={want:'Na lista',doing:'Em andamento',done:'Concluído'};
