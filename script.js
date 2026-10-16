@@ -1,4 +1,5 @@
 const RAWG_KEY='7b07ac5d0ea74c20afe3e8140e91136e';
+const TMDB_KEY='edf0b286a5711a735d44a37f595109fa';
 
 (function(){
 'use strict';
@@ -34,7 +35,7 @@ function makeState(withExamples){
   const now=Date.now(),day=864e5;
   const cj=uid(),cf=uid(),cs=uid(),cd=uid();
   const s={v:1,profile:profileDefaults(),
-    collections:[{id:cj,name:'Jogos',color:'#4cc2ff',game:true},{id:cf,name:'Filmes',color:'#ff8a5c'},{id:cs,name:'Séries',color:'#b58cff'},{id:cd,name:'Desenhos',color:'#4fd6a0'}],
+    collections:[{id:cj,name:'Jogos',color:'#4cc2ff',kind:'game'},{id:cf,name:'Filmes',color:'#ff8a5c',kind:'movie'},{id:cs,name:'Séries',color:'#b58cff',kind:'tv'},{id:cd,name:'Desenhos',color:'#4fd6a0',kind:'anim'}],
     items:[],photos:[],memories:[],friends:[]};
   if(withExamples){
     const mk=(col,title,rating,status,fav,k)=>({id:uid(),col,title,cover:'',rating,status,note:'',fav,added:now-k*day*0.8,ex:true});
@@ -49,11 +50,12 @@ function makeState(withExamples){
   }
   return s;
 }
+const guessKind=n=>/^jogos?$/i.test(n)?'game':/^filmes?$/i.test(n)?'movie':/^s[eé]ries?$/i.test(n)?'tv':/^desenhos?|anima/i.test(n)?'anim':'';
 function normalize(o){
   const s={v:1,profile:Object.assign(profileDefaults(),o&&o.profile||{})};
   ['collections','items','photos','memories','friends'].forEach(k=>{s[k]=Array.isArray(o&&o[k])?o[k]:[];});
   if(!s.collections.length)s.collections=makeState(false).collections;
-  s.collections.forEach(c=>{if(c.game===undefined)c.game=/^jogos?$/i.test(c.name);});
+  s.collections.forEach(c=>{if(c.kind===undefined)c.kind=c.game?'game':guessKind(c.name);delete c.game;});
   return s;
 }
 const real=a=>a.filter(x=>!x.ex);
@@ -85,18 +87,33 @@ function render(im,sp){
   const x=c.getContext('2d');x.fillStyle='#fff';x.fillRect(0,0,cw,ch);x.drawImage(im,sx,sy,sw,sh,0,0,cw,ch);
   return c.toDataURL('image/jpeg',sp.q||.82);
 }
-let acList=[],acT=null,acCtl=null;
+let acList=[],acT=null,acCtl=null,acSrc='game';
 const gameCache=new Map();
-const isGameCol=id=>{const c=colOf(id);return !!(c&&c.game);};
-async function searchGames(q){
-  const k=norm(q);
+const kindOf=id=>{const c=colOf(id);return c?(c.kind||''):'';};
+const keyOf=k=>k==='game'?RAWG_KEY:TMDB_KEY;
+const kindSel=v=>[['','Sem busca'],['game','Jogos'],['movie','Filmes'],['tv','Séries'],['anim','Desenhos']].map(k=>`<option value="${k[0]}"${v===k[0]?' selected':''}>${k[1]}</option>`).join('');
+async function searchMedia(kind,q){
+  const k=kind+'|'+norm(q);
   if(gameCache.has(k))return gameCache.get(k);
   if(acCtl)acCtl.abort();
   acCtl=new AbortController();
-  const r=await fetch('https://api.rawg.io/api/games?key='+RAWG_KEY+'&page_size=6&search='+encodeURIComponent(q.trim()),{signal:acCtl.signal});
-  if(!r.ok)throw new Error('rawg');
-  const j=await r.json();
-  const list=(j.results||[]).map(g=>({id:g.id,name:g.name,img:g.background_image||'',year:g.released?g.released.slice(0,4):''}));
+  let list;
+  if(kind==='game'){
+    const r=await fetch('https://api.rawg.io/api/games?key='+RAWG_KEY+'&page_size=6&search='+encodeURIComponent(q.trim()),{signal:acCtl.signal});
+    if(!r.ok)throw new Error('rawg');
+    const j=await r.json();
+    list=(j.results||[]).map(g=>({id:g.id,key:'game:'+g.id,name:g.name,img:g.background_image||'',year:g.released?g.released.slice(0,4):''}));
+  }else{
+    const ep=kind==='movie'?'movie':kind==='tv'?'tv':'multi';
+    const r=await fetch('https://api.themoviedb.org/3/search/'+ep+'?api_key='+TMDB_KEY+'&language=pt-BR&include_adult=false&query='+encodeURIComponent(q.trim()),{signal:acCtl.signal});
+    if(!r.ok)throw new Error('tmdb');
+    const j=await r.json();
+    list=(j.results||[]).filter(g=>ep!=='multi'||g.media_type==='movie'||g.media_type==='tv').slice(0,6).map(g=>{
+      const mt=ep==='multi'?g.media_type:ep;
+      const d=g.release_date||g.first_air_date||'';
+      return {id:g.id,key:mt+':'+g.id,name:g.title||g.name||'',img:g.poster_path?'https://image.tmdb.org/t/p/w342'+g.poster_path:'',year:d.slice(0,4)};
+    });
+  }
   gameCache.set(k,list);
   return list;
 }
@@ -111,45 +128,47 @@ function coverFromUrl(u){
 function drawAc(list,msg){
   const box=$('#ac');if(!box)return;
   if(!list&&!msg){box.hidden=true;box.innerHTML='';return;}
-  const body=list?list.map(g=>`<button type="button" class="ac-it" data-act="pick-game" data-gid="${g.id}"><span class="ac-img">${g.img?`<img src="${esc(g.img)}" alt="" loading="lazy">`:''}</span><span><b>${esc(g.name)}</b><small>${esc(g.year)}</small></span></button>`).join(''):`<div class="ac-msg">${esc(msg)}</div>`;
-  box.innerHTML=body+'<div class="ac-foot">Dados: <a href="https://rawg.io" target="_blank" rel="noopener">RAWG</a></div>';
+  const body=list?list.map(g=>`<button type="button" class="ac-it" data-act="pick-game" data-gid="${esc(g.key)}"><span class="ac-img">${g.img?`<img src="${esc(g.img)}" alt="" loading="lazy">`:''}</span><span><b>${esc(g.name)}</b><small>${esc(g.year)}</small></span></button>`).join(''):`<div class="ac-msg">${esc(msg)}</div>`;
+  box.innerHTML=body+(acSrc==='game'?'<div class="ac-foot">Dados: <a href="https://rawg.io" target="_blank" rel="noopener">RAWG</a></div>':'<div class="ac-foot">Dados: <a href="https://www.themoviedb.org" target="_blank" rel="noopener">TMDB</a></div>');
   box.hidden=false;
 }
 function onTitleInput(t){
   if(draft){draft.gameId=null;draft.year='';}
   clearTimeout(acT);
   const q=t.value.trim();
-  if(!isGameCol(t.form.elements.col.value)||q.length<2){drawAc();return;}
-  if(!RAWG_KEY){drawAc(null,'Coloque sua chave da RAWG no topo do script.js para buscar jogos.');return;}
+  const kind=kindOf(t.form.elements.col.value);
+  if(!kind||q.length<2){drawAc();return;}
+  acSrc=kind==='game'?'game':'tmdb';
+  if(!keyOf(kind)){drawAc(null,kind==='game'?'Coloque sua chave da RAWG no topo do script.js para buscar jogos.':'Coloque sua chave do TMDB no topo do script.js para buscar filmes, séries e desenhos.');return;}
   acT=setTimeout(async()=>{
     drawAc(null,'Buscando…');
     try{
-      const l=await searchGames(q);
+      const l=await searchMedia(kind,q);
       if(t.value.trim()!==q)return;
       acList=l;
-      drawAc(l.length?l:null,l.length?'':'Nenhum jogo encontrado. Dá pra salvar com o nome digitado.');
+      drawAc(l.length?l:null,l.length?'':'Nenhum resultado encontrado. Dá pra salvar com o nome digitado.');
     }catch(e){if(e.name!=='AbortError')drawAc(null,'Não consegui buscar agora. Dá pra salvar com o nome digitado.');}
   },350);
 }
 async function pickGame(gid){
-  const g=acList.find(x=>String(x.id)===String(gid));if(!g||!draft)return;
+  const g=acList.find(x=>x.key===gid);if(!g||!draft)return;
   const f=$('form[data-form="item"]');if(!f)return;
-  const dup=S.items.find(i=>i.gameId===g.id&&i.id!==draft.id);
+  const dup=S.items.find(i=>i.id!==draft.id&&(i.gameId===g.key||(g.key.indexOf('game:')===0&&i.gameId===g.id)));
   f.elements.title.value=g.name;
-  Object.assign(draft,{title:g.name,gameId:g.id,year:g.year});
+  Object.assign(draft,{title:g.name,gameId:g.key,year:g.year});
   drawAc();
-  if(dup)toast('Você já tem este jogo guardado.');
+  if(dup)toast('Você já tem este título guardado.');
   if(g.img){
     const url=await coverFromUrl(g.img);
-    if(draft&&draft.gameId===g.id){draft.cover=url;setPreview('cover',url);}
+    if(draft&&draft.gameId===g.key){draft.cover=url;setPreview('cover',url);}
   }
 }
-async function autoMatch(d){
+async function autoMatch(d,kind){
   try{
-    const l=await withTimeout(searchGames(d.title),3000);
+    const l=await withTimeout(searchMedia(kind,d.title),3000);
     const g=l[0];
     if(g&&norm(g.name)===norm(d.title)){
-      d.title=g.name;d.gameId=g.id;d.year=g.year;
+      d.title=g.name;d.gameId=g.key;d.year=g.year;
       if(!d.cover&&g.img)d.cover=await withTimeout(coverFromUrl(g.img),4000);
     }
   }catch(e){}
@@ -376,9 +395,9 @@ function viewSettings(){
         <div class="seg">${[['auto','Automático'],['light','Claro'],['dark','Escuro']].map(t=>`<button data-act="theme" data-theme-set="${t[0]}" aria-pressed="${p.theme===t[0]?'true':'false'}">${t[1]}</button>`).join('')}</div></div>
     </section>
     <section class="sec"><h2>Coleções</h2>
-      <p class="note">Crie quantas quiser: livros, músicas, mangás, o que for. Apagar uma coleção apaga os itens dela. Marque “Jogos” nas coleções que devem ter busca automática de nome e capa.</p>
-      ${S.collections.map(c=>`<div class="crow"><input data-colname="${c.id}" value="${esc(c.name)}" maxlength="30" aria-label="Nome da coleção"><input type="color" data-colcolor="${c.id}" value="${esc(c.color)}" aria-label="Cor da coleção"><label class="chk"><input type="checkbox" data-colgame="${c.id}"${c.game?' checked':''}>Jogos</label><button class="btn danger" data-act="del-col" data-id="${c.id}">Apagar</button></div>`).join('')}
-      <div class="crow"><input id="newcol" placeholder="Nova coleção, ex: Livros" maxlength="30" aria-label="Nome da nova coleção"><input type="color" id="newcolor" value="#ffb02e" aria-label="Cor da nova coleção"><label class="chk"><input type="checkbox" id="newgame">Jogos</label><button class="btn primary" data-act="add-col">Criar</button></div>
+      <p class="note">Crie quantas quiser: livros, músicas, mangás, o que for. Apagar uma coleção apaga os itens dela. Escolha em cada coleção o tipo de busca automática de nome e capa: jogos, filmes, séries ou desenhos.</p>
+      ${S.collections.map(c=>`<div class="crow"><input data-colname="${c.id}" value="${esc(c.name)}" maxlength="30" aria-label="Nome da coleção"><input type="color" data-colcolor="${c.id}" value="${esc(c.color)}" aria-label="Cor da coleção"><select data-colkind="${c.id}" aria-label="Tipo de busca">${kindSel(c.kind||'')}</select><button class="btn danger" data-act="del-col" data-id="${c.id}">Apagar</button></div>`).join('')}
+      <div class="crow"><input id="newcol" placeholder="Nova coleção, ex: Livros" maxlength="30" aria-label="Nome da nova coleção"><input type="color" id="newcolor" value="#ffb02e" aria-label="Cor da nova coleção"><select id="newkind" aria-label="Tipo de busca">${kindSel('')}</select><button class="btn primary" data-act="add-col">Criar</button></div>
     </section>
     <section class="sec"><h2>Seus dados</h2>
       <p class="note">Tudo fica salvo neste navegador, neste aparelho. Se limpar os dados do navegador, o hub some. Exporte um backup de vez em quando e importe quando precisar.</p>
@@ -492,7 +511,7 @@ const forms={
     const sb=f.querySelector('button.primary');if(sb)sb.disabled=true;
     const isNew=d._new;delete d._new;
     Object.assign(d,{title,col:fv(f,'col'),status:fv(f,'status'),note:fv(f,'note').trim()});
-    if(RAWG_KEY&&isGameCol(d.col)&&!d.gameId)await autoMatch(d);
+    const kd=kindOf(d.col);if(kd&&keyOf(kd)&&!d.gameId)await autoMatch(d,kd);
     const i=S.items.findIndex(x=>x.id===d.id);
     if(i>=0)S.items[i]=d;else S.items.unshift(d);
     finish(isNew?'Item guardado':'Item atualizado');
@@ -552,7 +571,7 @@ document.addEventListener('click',e=>{
     case 'theme':S.profile.theme=b.dataset.themeSet;save();applyTheme();viewSettings();break;
     case 'add-col':{
       const n=$('#newcol').value.trim();if(!n){$('#newcol').focus();return;}
-      S.collections.push({id:uid(),name:n,color:$('#newcolor').value,game:$('#newgame').checked});save();renderTabs();viewSettings();toast('Coleção criada');break;}
+      S.collections.push({id:uid(),name:n,color:$('#newcolor').value,kind:$('#newkind').value});save();renderTabs();viewSettings();toast('Coleção criada');break;}
     case 'del-col':{
       const c=colOf(id),n=S.items.filter(i=>i.col===id).length;
       if(S.collections.length<=1){toast('Mantenha pelo menos uma coleção.');return;}
@@ -606,7 +625,7 @@ document.addEventListener('change',async e=>{
     toast(ok?ok+(ok===1?' foto guardada':' fotos guardadas'):'Não consegui abrir essas imagens.');
     return;
   }
-  if(t.dataset.colgame){const c=colOf(t.dataset.colgame);if(c){c.game=t.checked;save();}return;}
+  if(t.dataset.colkind!==undefined){const c=colOf(t.dataset.colkind);if(c){c.kind=t.value;save();}return;}
   if(t.name==='col'&&t.form&&t.form.dataset.form==='item'){if(draft)draft.col=t.value;drawAc();return;}
   if(t.dataset.shots!==undefined){
     const files=Array.from(t.files||[]);t.value='';if(!files.length||!draft)return;
